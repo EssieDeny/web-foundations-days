@@ -22,23 +22,23 @@ The following assumptions are used:
 
 ### Daily Active Users
 
-Daily active users (DAU) = Registered users × Daily active percentage.
+Daily active users (DAU) = Registered users x Daily active percentage.
 
-10,000,000 × 10% = 1,000,000 daily active users.
+10,000,000 x 10% = 1,000,000 daily active users.
 
 ### Photo Uploads per Second
 
-Daily uploads = 1,000,000 users × 1 photo = 1,000,000 uploads per day.
+Daily uploads = 1,000,000 users x 1 photo = 1,000,000 uploads per day.
 
-Average uploads per second = 1,000,000 ÷ 86,400 = approximately 11.57 uploads per second.
+Average uploads per second = 1,000,000 / 86,400 = approximately 11.57 uploads per second.
 
 ### Feed Requests per Second
 
-Daily feed requests = 1,000,000 users × 50 pages = 50,000,000 feed requests per day.
+Daily feed requests = 1,000,000 users x 50 pages = 50,000,000 feed requests per day.
 
-Average feed requests per second = 50,000,000 ÷ 86,400 = approximately 579 feed requests per second.
+Average feed requests per second = 50,000,000 / 86,400 = approximately 579 feed requests per second.
 
-Peak feed requests per second = 579 × 5 = approximately 2,895 feed requests per second.
+Peak feed requests per second = 579 x 5 = approximately 2,895 feed requests per second.
 
 The system should therefore be designed to handle about 579 feed requests per second on average and approximately 2,895 during estimated peak traffic.
 
@@ -51,8 +51,8 @@ Each upload produces an original photo and a thumbnail.
 - Original photo = 2 MB.
 - Thumbnail = 50 KB = 0.05 MB.
 - Total storage per upload = 2.05 MB.
-- Daily storage growth = 1,000,000 × 2.05 MB = 2,050,000 MB = 2.05 TB.
-- Annual storage growth = 2.05 TB × 365 = 748.25 TB per year.
+- Daily storage growth = 1,000,000 x 2.05 MB = 2,050,000 MB = 2.05 TB.
+- Annual storage growth = 2.05 TB x 365 = 748.25 TB per year.
 
 This estimate includes original photos and thumbnails but excludes backups, replication, metadata, and other storage overhead.
 
@@ -72,7 +72,7 @@ This separation allows image files and database records to scale independently. 
 
 ## 5. Architecture Diagram
 
-text
+```text
 Users
 |
 +----------+----------+
@@ -150,6 +150,8 @@ v
 
           Application servers write to the primary database
           and use the read replica for suitable read queries.
+
+```
 
 ## 6. Architecture Components and Their Purposes
 
