@@ -20,29 +20,31 @@ The following assumptions are used:
 
 ## 2. Capacity Calculations
 
-### Daily active users
+### Daily Active Users
 
 Daily active users (DAU) = Registered users × Daily active percentage.
 
 10,000,000 × 10% = **1,000,000 daily active users**.
 
-### Photo uploads per second
+### Photo Uploads per Second
 
 Daily uploads = 1,000,000 users × 1 photo = 1,000,000 uploads per day.
 
 Average uploads per second = 1,000,000 ÷ 86,400 = approximately **11.57 uploads per second**.
 
-### Feed views per second
+### Feed Requests per Second
 
-Daily feed views = 1,000,000 users × 50 pages = 50,000,000 feed views per day.
+Daily feed requests = 1,000,000 users × 50 pages = 50,000,000 feed requests per day.
 
-Average feed views per second = 50,000,000 ÷ 86,400 = approximately **579 feed views per second**.
+Average feed requests per second = 50,000,000 ÷ 86,400 = approximately **579 feed requests per second**.
 
-Peak feed views per second = 579 × 5 = approximately **2,895 feed views per second**.
+Peak feed requests per second = 579 × 5 = approximately **2,895 feed requests per second**.
 
 The system should therefore be designed to handle about 579 feed requests per second on average and approximately 2,895 during estimated peak traffic.
 
-### Photo storage per year
+These figures represent feed page requests only. Additional traffic will come from API calls, image delivery, authentication, and other application activities.
+
+### Photo Storage per Year
 
 Each upload produces an original photo and a thumbnail.
 
@@ -52,13 +54,13 @@ Each upload produces an original photo and a thumbnail.
 - Daily storage growth = 1,000,000 × 2.05 MB = 2,050,000 MB = 2.05 TB.
 - Annual storage growth = 2.05 TB × 365 = **748.25 TB per year**.
 
-This estimate includes original photos and thumbnails but excludes backups, replication, metadata, and other overhead.
+This estimate includes original photos and thumbnails but excludes backups, replication, metadata, and other storage overhead.
 
 ## 3. Read-Heavy or Write-Heavy?
 
 SnapShare is a **read-heavy system** because users view 50 million feed pages per day but upload only one million photos per day.
 
-Feed views occur 50 times as often as photo uploads. The architecture should therefore prioritize fast reads through caching, database read replicas, and CDN delivery while maintaining reliable upload processing.
+Feed page requests occur 50 times as often as photo uploads. The architecture should therefore prioritize fast reads through caching, database read replicas, and content delivery network (CDN) image delivery while maintaining reliable upload processing.
 
 ## 4. Why Photos Should Not Be Stored in the Database
 
@@ -66,44 +68,52 @@ Photos are large binary files that would consume substantial database storage an
 
 Instead, original photos and thumbnails should be stored in object storage. The database should store metadata such as photo IDs, user IDs, captions, timestamps, processing status, and object-storage keys.
 
-This separation allows the image files and database to scale independently and lets the CDN deliver frequently accessed images efficiently.
+This separation allows image files and database records to scale independently. It also allows the CDN to deliver frequently accessed images efficiently without requiring every image request to pass through the application servers.
 
 ## 5. Architecture Diagram
 
 ```text
-                         Users
-                           |
-                           v
-                     +-----------+
-                     |    CDN    |
-                     +-----------+
-                           |
-                           v
-                   +----------------+
-                   | Load Balancer  |
-                   +----------------+
-                           |
-                +----------+----------+
-                |          |          |
-                v          v          v
-           +---------+ +---------+ +---------+
-           | App     | | App     | | App     |
-           | Server  | | Server  | | Server  |
-           +---------+ +---------+ +---------+
-                |          |
-                +----+-----+
-                     |
-             +-------+--------+
-             |                |
-             v                v
-        +----------+    +-------------+
-        | Redis    |    | Primary DB  |
-        | Cache    |    +-------------+
-        +----------+           |
-                               v
-                        +--------------+
-                        | Read Replica |
-                        +--------------+
+                           Users
+                             |
+                  +----------+----------+
+                  |                     |
+                  v                     v
+          +---------------+     +---------------+
+          | CDN           |     | API Requests  |
+          | Image Delivery|     +---------------+
+          +---------------+             |
+                  |                     v
+                  |             +---------------+
+                  |             | Load Balancer |
+                  |             +---------------+
+                  |                     |
+                  |          +----------+----------+
+                  |          |          |          |
+                  |          v          v          v
+                  |      +--------+ +--------+ +--------+
+                  |      | App    | | App    | | App    |
+                  |      | Server | | Server | | Server |
+                  |      +--------+ +--------+ +--------+
+                  |          |          |
+                  |          +-----+----+
+                  |                |
+                  |       +--------+---------+
+                  |       |                  |
+                  |       v                  v
+                  |  +----------+     +-------------+
+                  |  | Redis    |     | Primary DB  |
+                  |  | Cache    |     +-------------+
+                  |  +----------+            |
+                  |                          v
+                  |                   +--------------+
+                  |                   | Read Replica |
+                  |                   +--------------+
+                  |
+                  v
+          +------------------+
+          | Object Storage   |
+          | Image Origin     |
+          +------------------+
 
           PHOTO UPLOAD AND THUMBNAIL PIPELINE
 
@@ -131,18 +141,24 @@ This separation allows the image files and database to scale independently and l
                   | Thumbnail        |
                   +------------------+
 
-        CDN delivers cached images from object storage.
-        App servers write to the primary DB and use the
-        read replica for suitable read queries.
+          The CDN retrieves image files from object storage
+          when they are not already cached.
+
+          Application servers handle API requests and
+          coordinate access to the cache, database,
+          object storage, and job queue.
+
+          Application servers write to the primary database
+          and use the read replica for suitable read queries.
 ```
 
 ## 6. Architecture Components and Their Purposes
 
-- **CDN (Content Delivery Network):** Delivers cached photos and thumbnails from locations closer to users, reducing latency and origin traffic.
-- **Load balancer:** Distributes incoming requests across healthy application servers to prevent individual servers from becoming overloaded.
+- **CDN (Content Delivery Network):** Delivers cached photos and thumbnails from locations closer to users, reducing latency and traffic to the origin.
+- **Load balancer:** Distributes incoming API requests across healthy application servers to prevent individual servers from becoming overloaded.
 - **Application servers:** Handle authentication, upload validation, feed generation, and communication between the database, cache, object storage, and job queue.
 - **Redis cache:** Stores frequently requested feed data and metadata to reduce repeated database queries and improve response times.
-- **Primary database:** Stores authoritative user records, follow relationships, captions, photo metadata, and object-storage keys.
+- **Primary database:** Stores authoritative user records, follow relationships, captions, photo metadata, processing status, and object-storage keys.
 - **Database read replica:** Handles suitable read queries to reduce the read workload on the primary database, although replication lag can temporarily produce stale results.
 - **Object storage:** Stores original photos and thumbnails as files, avoiding the cost and complexity of storing large images directly in database rows.
 - **Job queue:** Holds thumbnail-generation tasks so image processing can happen asynchronously instead of blocking the upload request.
@@ -166,19 +182,19 @@ If thumbnail generation fails, the queue should support retries and monitoring. 
 
 ## 8. Architectural Trade-Offs
 
-### Trade-off 1: Caching versus data freshness
+### Trade-Off 1: Caching versus Data Freshness
 
 Caching feed data reduces database load and improves response times. However, users might temporarily see outdated feeds after new photos are uploaded or follow relationships change. Cache invalidation and expiration policies improve freshness but add complexity and can increase database traffic.
 
-### Trade-off 2: Read replicas versus consistency
+### Trade-Off 2: Read Replicas versus Consistency
 
 Read replicas increase read capacity and help serve millions of feed requests. However, replication lag can cause a newly uploaded photo to be missing temporarily from a feed. Critical reads can use the primary database, while ordinary feed reads can use the replica when slight delays are acceptable.
 
-### Trade-off 3: Asynchronous processing versus immediate thumbnail availability
+### Trade-Off 3: Asynchronous Processing versus Immediate Thumbnail Availability
 
 Generating thumbnails in the background makes uploads faster and prevents image processing from blocking application servers. However, thumbnails are not immediately available, and the queue and workers require monitoring, retries, and failure handling.
 
-### Trade-off 4: CDN performance versus caching costs and freshness
+### Trade-Off 4: CDN Performance versus Caching Costs and Freshness
 
 A CDN reduces image-delivery latency and origin traffic. However, cached images may become stale if files change, and CDN requests and data transfer can add costs. Appropriate cache-control settings and invalidation policies are therefore necessary.
 
