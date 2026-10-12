@@ -1,0 +1,7 @@
+# Day 8 Reflection
+
+The most difficult concept in this course was understanding how different parts of a system work together when traffic increases. At first, concepts such as caching, load balancing, database transactions, and queues seemed like separate solutions. Through the daily assignments, I learned that each component addresses a different problem. For example, caching reduces repeated reads, load balancing distributes requests, and transactions protect data when multiple users perform operations at the same time. Breaking each problem into smaller steps and applying the concepts to practical examples helped me understand them better.
+
+Based on the feedback from my capstone, I would improve the explanation of how the system handles high traffic and protects data consistency. I would make the assumptions behind traffic estimates clearer, distinguish average traffic from peak traffic, and explain how the database prevents conflicting updates. I would also improve the architecture diagram so that the relationship between the client, API, cache, database, and background workers is easier to follow.
+
+Next, I want to learn more about cloud infrastructure and deployment, particularly Microsoft Azure. I plan to study how to deploy an application, configure monitoring, manage databases, and scale services based on demand. I also want to practise implementing REST APIs and database transactions in a small working project. This will help me move beyond drawing system designs to understanding how the proposed components work in a real application.
