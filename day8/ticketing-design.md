@@ -19,13 +19,13 @@ TicketHub is a website where customers discover concerts and events, select seat
 
 ### 1.2 Non-Functional Requirements
 
-**Performance:** Under normal traffic, most event-page and browsing requests should respond within approximately 500 milliseconds. During a popular sale, the system should aim to maintain responsive browsing and provide clear feedback if checkout requests must wait.
+**Performance:** Under normal traffic, most event-page and browsing requests should respond within approximately 500 milliseconds. During a popular sale, the system should maintain responsive browsing and provide clear feedback if checkout requests must wait.
 
 **Scalability:** The system must support 2 million registered users, 50,000 daily visitors, and sudden traffic increases when popular concerts go on sale.
 
 **Correctness and consistency:** Each physical seat can have only one active hold at a time and can be sold only once. Orders, seat assignments, and payment records must remain consistent even when several customers act simultaneously.
 
-**Fairness:** The system should use a transparent waiting room or queue during major sales, communicate customers' positions or waiting status, apply reasonable rate limits, and prevent automated clients from overwhelming the service. A queue must not guarantee a seat before the database confirms a successful hold.
+**Fairness:** The system should use a transparent waiting room or queue during major sales, communicate customers' waiting status, apply reasonable rate limits, and prevent automated clients from overwhelming the service. A queue must not guarantee a seat before the database confirms a successful hold.
 
 **Availability and reliability:** The website should continue serving browsing requests during traffic spikes. If a service fails, the system should recover safely without issuing duplicate tickets or losing track of payments.
 
@@ -100,18 +100,18 @@ This estimate assumes five requests per customer. It does not include additional
 
 ### 2.3 Comparison
 
-| Metric                           |                 Normal day |                                 Popular concert sale |
-| -------------------------------- | -------------------------: | ---------------------------------------------------: |
-| Registered users                 |                  2,000,000 |                                            2,000,000 |
-| Visitors or interested customers |             50,000 per day |                                200,000 in 10 minutes |
-| Estimated page views or requests | 500,000 page views per day |                     1,000,000 requests in 10 minutes |
-| Average estimated request rate   |      5.8 page views/second |                                1,667 requests/second |
-| Planning busy-period rate        |         58 requests/second | Instantaneous peak may exceed the ten-minute average |
-| Ticket sales or available seats  | 5,000 tickets sold per day |                               20,000 seats available |
+| Metric                           | Normal day                 | Popular concert sale                                 |
+| -------------------------------- | -------------------------- | ---------------------------------------------------- |
+| Registered users                 | 2,000,000                  | 2,000,000                                            |
+| Visitors or interested customers | 50,000 per day             | 200,000 in 10 minutes                                |
+| Estimated page views or requests | 500,000 page views per day | 1,000,000 requests in 10 minutes                     |
+| Average estimated request rate   | 5.8 page views/second      | 1,667 requests/second                                |
+| Planning busy-period rate        | 58 page views/second       | Instantaneous peak may exceed the ten-minute average |
+| Ticket sales or available seats  | 5,000 tickets sold per day | 20,000 seats available                               |
 
 The estimated popular-sale rate of 1,667 requests per second is approximately 287 times the normal daily average of 5.8 page views per second.
 
-Compared with the assumed normal busy-period rate of 58 requests per second, the popular-sale average is approximately 29 times higher.
+Compared with the assumed normal busy-period rate of 58 page views per second, the popular-sale average is approximately 29 times higher.
 
 The system must therefore prepare for a sharp increase in demand. A waiting room, caching, horizontal scaling, and database-level seat protection help manage this demand without sacrificing purchase correctness.
 
@@ -325,4 +325,109 @@ The application checks the number of affected rows.
 - If one row is updated, the seat was successfully held.
 - If zero rows are updated, the seat was not available, so the request fails with a conflict response.
 
-When two customers try to hold the same
+When two customers try to hold the same seat, the database processes the conditional updates so that only one customer can successfully change the seat from AVAILABLE to HELD. The other customer's update affects zero rows and receives a 409 Conflict response.
+
+For a request containing multiple seats, TicketHub must verify that every requested seat was successfully held. If any seat cannot be held, the transaction is rolled back so that the customer does not receive only part of the requested hold.
+
+### 5.2 Handling Expired Holds
+
+A hold is valid for 10 minutes. When the expiry time passes, the system must allow another customer to hold the seat.
+
+The server can release expired holds using a background worker or check and reclaim an expired hold during a new hold request. A seat should only be reclaimed if its hold has expired and it has not been sold.
+
+The database must perform the status and expiry checks atomically. This prevents a background worker from releasing a seat that has already been sold or legitimately held again.
+
+### 5.3 Finalizing a Purchase
+
+After the payment provider confirms successful payment, TicketHub must verify that the order and its holds are still valid. It then uses a database transaction to mark the seats as SOLD, record the finalized order items, and update the order and payment statuses.
+
+These database changes must succeed together. If the transaction fails, TicketHub must not issue duplicate tickets. The payment result must be reconciled with the payment provider, and the system must safely retry or investigate the incomplete purchase.
+
+Payment-provider requests should not be held inside a long-running database transaction. Idempotency keys and provider transaction references help prevent duplicate charges when requests are retried.
+
+### 5.4 Why This Prevents Double-Booking
+
+The conditional database update checks and changes seat availability as one atomic operation. Even if many application servers process requests simultaneously, only one can successfully claim a seat that is available.
+
+The unique constraint on `Order_Items.seat_id` adds a second layer of protection against assigning the same seat to two finalized ticket records.
+
+The waiting room reduces pressure on the application, and the cache speeds up browsing, but neither guarantees ownership. The database transaction and constraints enforce the final decision.
+
+## 6. System Architecture
+
+```mermaid
+flowchart TD
+    U[Customers and Browsers]
+    CDN[CDN and Static Content]
+    W[Web Application]
+    Q[Virtual Waiting Room]
+    LB[Load Balancer]
+    API[Auto-scaled Application Servers]
+    CACHE[Redis Cache]
+    DB[(Primary PostgreSQL Database)]
+    REPLICA[(Read Replicas)]
+    PAY[External Payment Provider]
+    QUEUE[Background Job Queue]
+    WORKER[Workers for Tickets and Notifications]
+
+    U --> CDN
+    CDN --> W
+    W --> Q
+    Q --> LB
+    LB --> API
+    API --> CACHE
+    API --> DB
+    API --> PAY
+    DB --> REPLICA
+    API --> QUEUE
+    QUEUE --> WORKER
+    WORKER --> DB
+```
+
+### 6.1 Architecture Components
+
+- **CDN:** Serves static files, images, and other reusable content close to customers. This reduces the number of requests reaching the application servers.
+- **Virtual waiting room:** During a popular sale, customers enter a queue. The system admits them at a controlled rate to reduce overload and support fair access.
+- **Load balancer:** Distributes incoming requests across application servers.
+- **Auto-scaled application servers:** Additional stateless servers can be started to handle increased demand. Every server uses the same database rules for seat reservations.
+- **Redis cache:** Stores suitable browsing data, such as event details and short-lived seat-map information. Cached availability is not authoritative; the database always performs the final hold check.
+- **Primary PostgreSQL database:** Stores seat statuses, holds, orders, and finalized purchases. Transactions and database constraints protect correctness.
+- **Read replicas:** Handle suitable read-only browsing and search queries to reduce load on the primary database. Replication delays must be considered because a replica may show stale information.
+- **External payment provider:** Processes payments without TicketHub storing raw card details.
+- **Background job queue and workers:** Generate ticket documents, send confirmation emails, and process expired holds. These tasks run outside the main checkout request where appropriate.
+
+### 6.2 Handling the Traffic Spike
+
+The popular-sale estimate is approximately 1,667 requests per second averaged across ten minutes, although actual peaks may be much higher.
+
+TicketHub can prepare additional application capacity before a scheduled sale, serve static content through the CDN, cache appropriate browsing data, and use the waiting room to control admission.
+
+The system should monitor queue length, response times, database load, failed hold requests, and payment errors. Capacity limits should be based on load testing rather than assuming that a particular number of application servers can handle the sale.
+
+Most importantly, the waiting room and cache reduce unnecessary load, while the primary database remains responsible for deciding who successfully holds and purchases each seat.
+
+## 7. Design Trade-offs
+
+### 7.1 Correctness vs. Availability
+
+TicketHub prioritizes correct seat ownership over accepting every purchase request immediately. If the primary database cannot confirm a hold, the system should wait, retry safely, or return a clear error rather than risk selling the same seat twice.
+
+### 7.2 Freshness vs. Performance
+
+Caching seat maps improves response times, especially during a major sale. However, a cached seat may appear available after another customer has held it. TicketHub accepts this limitation because the database checks availability again before granting the hold.
+
+### 7.3 Fairness vs. Simplicity
+
+A virtual waiting room adds infrastructure and operational complexity. However, it helps control traffic, discourages excessive refreshing, and gives the system a way to admit customers in a controlled order. Queue position does not guarantee a ticket because seat availability must still be confirmed.
+
+### 7.4 Short Holds vs. Payment Reliability
+
+A 10-minute hold gives customers time to complete checkout without reserving seats indefinitely. However, payment delays can cause holds to expire. TicketHub needs clear expiry rules, idempotent payment handling, and payment reconciliation so that a delayed response does not result in duplicate charges or incorrectly issued tickets.
+
+## 8. Conclusion
+
+TicketHub must support ordinary event browsing as well as sudden, intense demand during popular ticket releases. Caching, a CDN, a waiting room, load balancing, and horizontally scalable application servers help the system handle this demand.
+
+The central design principle is that the database guarantees seat ownership. Conditional updates, transactions, foreign keys, and unique constraints prevent duplicate seat assignments. Idempotent checkout and payment reconciliation further protect customers when requests fail or are repeated.
+
+This approach balances performance, fairness, reliability, and correctness while allowing TicketHub to scale for major concert sales.
